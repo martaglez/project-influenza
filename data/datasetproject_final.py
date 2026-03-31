@@ -1,7 +1,11 @@
 import pandas as pd
+import os
 
-file_path = "/Users/marta/Downloads/sentinelTestsDetectionsPositivity.csv"
-data = pd.read_csv(file_path)
+base_dir = os.path.dirname(__file__)
+
+input_path = os.path.join(base_dir, "sentinelTestsDetectionsPositivity.csv")
+
+data = pd.read_csv(input_path)
 
 flu = data[
     data["pathogen"].str.contains("Influenza", case=False, na=False) &
@@ -22,7 +26,9 @@ flu_weekly = flu.groupby(["country", "year", "week"], as_index = False)["cases"]
 
 flu_weekly = flu_weekly.sort_values(["country","year","week"]).reset_index(drop = True)
 
-flu_weekly.to_csv("influenza_clean_weekly.csv", index = False)
+output_path = os.path.join(base_dir, "influenza_clean_weekly.csv")
+
+flu_weekly.to_csv(output_path, index = False)
 
 print(flu_weekly.head())
 print(f"Rows in final dataset: {len(flu_weekly)}")
