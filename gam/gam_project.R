@@ -3,114 +3,120 @@ library(dplyr)
 library(mgcv)
 
 script_dir <- dirname(rstudioapi::getActiveDocumentContext()$path)
+data_dir <- file.path(script_dir, "..", "data")
 
-csv_path <- file.path(script_dir, "..", "data", "influenza_clean_weekly.csv")
+train <- read_csv(file.path(data_dir, "train.csv"))
+val   <- read_csv(file.path(data_dir, "val.csv"))
+test  <- read_csv(file.path(data_dir, "test.csv"))
 
-flu <- read_csv(csv_path)
+train$country <- as.factor(train$country)
+val$country   <- as.factor(val$country)
+test$country  <- as.factor(test$country)
 
-flu$country <- as.factor(flu$country)
 
-flu <- flu %>% arrange(country, year, week)
+# GAM
+gam_model <- gam(
+  cases ~ 
+    s(year, k = 3) +
+    s(week, bs = "cc", k = 3) +
+    lat + lon,
+  data = train,
+  method = "REML"
+)
 
-flu <- flu %>%
-  arrange(country, year, week) %>%
-  group_by(country) %>%
-  mutate(
-    lag1 = lag(cases, 1),
-    lag2 = lag(cases, 2),
-    lag3 = lag(cases, 3),
-    lag4 = lag(cases, 4),
-    lag5 = lag(cases, 5)) %>%
-  ungroup() %>%
-  na.omit()
-
-flu <- na.omit(flu)
-
-train <- flu %>%
-  group_by(country) %>%
-  arrange(year, week) %>%
-  mutate(row_id = row_number(), n = n(), split = ifelse(row_id <= 0.8 * n, "train", "test")) %>%
-  ungroup() %>%
-  filter(split == "train") %>%
-  select(-row_id, -n, -split)
-
-test <- flu %>%
-  group_by(country) %>%
-  arrange(year, week) %>%
-  mutate(row_id = row_number(), n = n(), split = ifelse(row_id <= 0.8 * n, "train", "test")) %>%
-  ungroup() %>%
-  filter(split == "test") %>%
-  select(-row_id, -n, -split)
-
-gam_model <- gam(cases ~ s(week, bs = "cc", k = 5) + lag1 + lag2 + lag3 + country,
-                 data = train, method = "REML")
 summary(gam_model)
+plot(gam_model)
 
+pred_val <- predict(gam_model, newdata = val)
 
-pred <- predict(gam_model, newdata = test)
+rmse_val <- sqrt(mean((val$cases - pred_val)^2))
+mae_val  <- mean(abs(val$cases - pred_val))
+r2_val   <- 1 - sum((val$cases - pred_val)^2) / sum((val$cases - mean(val$cases))^2)
 
-rmse <- sqrt(mean((test$cases - pred)^2))
-mae <- mean(abs(test$cases - pred))
-r2 <- 1 - sum((test$cases - pred)^2) / sum((test$cases - mean(test$cases))^2)
+cat("Validation RMSE:", rmse_val, "\n")
+cat("Validation MAE:", mae_val, "\n")
+cat("Validation R2:", r2_val, "\n")
 
-cat("RMSE:", rmse, "\n")
-cat("MAE:", mae, "\n")
-cat("R2:", r2, "\n")
+pred_test <- predict(gam_model, newdata = test)
+
+rmse <- sqrt(mean((test$cases - pred_test)^2))
+mae  <- mean(abs(test$cases - pred_test))
+r2   <- 1 - sum((test$cases - pred_test)^2) / sum((test$cases - mean(test$cases))^2)
+
+cat("Test RMSE:", rmse, "\n")
+cat("Test MAE:", mae, "\n")
+cat("Test R2:", r2, "\n")
 
 
 #PLOTS
+#Real
 library(ggplot2)
+library(dplyr)
 
-plot_data <- test %>%
-  arrange(year, week) %>%
-  mutate(predicted = predict(gam_model, newdata = test))
+data_all <- bind_rows(train, val, test)
 
-plot_data <- plot_data %>% filter(year >= 2022 & year <= 2026)
+data_all <- data_all %>%
+  mutate(time = year + week/52)
 
-#Real
-p <- ggplot(plot_data) +
-  geom_point(aes(x = week, y = cases, color = factor(year)), alpha = 0.6, size = 2) +
-  facet_wrap(~ "Real Cases") +
-  scale_color_brewer(palette = "Set1") +
-  labs(x = "Week", y = "Cases", color = "Year") +
-  ylim(0, 400) +
-  theme_minimal(base_size = 14)
-
-#Predicted
-p2 <- ggplot(plot_data) +
-  geom_point(aes(x = week, y = predicted, color = factor(year)), alpha = 0.6, size = 2) +
-  facet_wrap(~ "Predicted Cases") +
-  scale_color_brewer(palette = "Set1") +
-  labs(x = "Week", y = "Cases", color = "Year") +
-  ylim(0, 400) +
-  theme_minimal(base_size = 14)
-
-library(gridExtra)
-grid.arrange(p, p2, ncol = 2)
-
-#ANOTHER PLOT
-test_plot <- test %>% filter(year >= 2022 & year <= 2026)
-
-test_plot$pred <- predict(gam_model, newdata = test_plot)
-
-#Real
-p_real <- ggplot(test_plot, aes(x = week, y = cases)) +
-  geom_point(alpha = 0.6, size = 2, color = "steelblue") +
-  facet_wrap(~ year, ncol = 1) +
-  ylim(0, 180) +
-  labs(title = "Real Cases by Year", x = "Week", y = "Cases") +
+ggplot(data_all, aes(x = time, y = cases, color = country)) +
+  geom_line(alpha = 0.7) +
+  labs(
+    title = "Influenza Cases Over Time by Country",
+    x = "Year",
+    y = "Cases"
+  ) +
   theme_minimal() +
-  theme(strip.text = element_text(size = 12, face = "bold"))
+  theme(legend.position = "right")
 
-#Predicted
-p_pred <- ggplot(test_plot, aes(x = week, y = pred)) +
-  geom_point(alpha = 0.6, size = 2, color = "firebrick") +
-  facet_wrap(~ year, ncol = 1) +
-  ylim(0, 180) +
-  labs(title = "Predicted Cases by Year", x = "Week", y = "Cases") +
+#Prediction
+data_all <- data_all %>%
+  mutate(pred = predict(gam_model, newdata = data_all))
+
+ggplot(data_all, aes(x = time, y = pred, color = country)) +
+  geom_line(alpha = 0.4) +
+  labs(
+    title = "Model Predictions Across Countries (GAM)",
+    x = "Year",
+    y = "Predicted Cases"
+  ) +
   theme_minimal() +
-  theme(strip.text = element_text(size = 12, face = "bold"))
+  theme(legend.position = "right")
+
+#Real vs predicted
+pred_test <- predict(gam_model, newdata = test)
+
+ggplot(test, aes(x = cases, y = pred_test)) +
+  geom_point(alpha = 0.4) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
+  labs(
+    title = "Parity Plot (Real vs Predicted)",
+    x = "Real Cases",
+    y = "Predicted Cases"
+  ) +
+  theme_minimal()
+
+#Spain
+country <- "Spain"
+
+df_country <- data_all %>%
+  filter(country == !!country) %>%
+  arrange(year, week)
+
+df_country <- df_country %>%
+  mutate(pred = predict(gam_model, newdata = df_country),
+         time = year + week/52)
+
+ggplot(df_country, aes(x = time)) +
+  geom_line(aes(y = cases, color = "Real"), alpha = 0.7) +
+  geom_line(aes(y = pred, color = "Predicted"), alpha = 0.7) +
+  labs(
+    title = paste("Real vs Predicted Influenza Cases -", country),
+    x = "Year",
+    y = "Cases",
+    color = ""
+  ) +
+  theme_minimal()
 
 library(patchwork)
-p_real | p_pred
-
+geom_line(real)
+geom_line(pred)

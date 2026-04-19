@@ -32,33 +32,62 @@ data["week_cos"] = np.cos(2 * np.pi * data["week"] / 52)
 data = data.dropna()
 
 # Country encoding
-data["country_code"] = data["country"].astype("category").cat.codes
+data = data.dropna(subset=["lat", "lon"])
 
-feature_cols = ["country_code", "year", "week_sin", "week_cos", "lag1", "lag2", "lag3", "lag4", "rolling_mean_3", "rolling_mean_5"]
+feature_cols = [
+    "lat",
+    "lon",
+    "year",
+    "week_sin",
+    "week_cos",
+    "lag1",
+    "lag2",
+    "lag3",
+    "lag4",
+    "rolling_mean_3",
+    "rolling_mean_5"
+]
 
 X = data[feature_cols]
 y = data["cases"]
 
 train_list = []
+val_list = []
 test_list = []
-
-# TODO: a nivel de serie temporal
 for country in data["country"].unique():
     df_country = data[data["country"] == country].sort_values(["year", "week"])
-    split_index = int(len(df_country) * 0.8)
-    train_list.append(df_country.iloc[:split_index])
-    test_list.append(df_country.iloc[split_index:])
+    
+    n = len(df_country)
+    train_end = int(n * 0.7)
+    val_end = int(n * 0.85)
 
-train = pd.concat(train_list)
-test = pd.concat(test_list)
+    train_list.append(df_country.iloc[:train_end])
+    val_list.append(df_country.iloc[train_end:val_end])
+    test_list.append(df_country.iloc[val_end:])
+
+train = pd.concat(train_list).reset_index(drop = True)
+val = pd.concat(val_list).reset_index(drop = True)
+test = pd.concat(test_list).reset_index(drop = True)
+
+output_dir = os.path.join(base_dir, "..", "data")
+
+train.to_csv(os.path.join(output_dir, "train.csv"), index = False)
+val.to_csv(os.path.join(output_dir, "val.csv"), index = False)
+test.to_csv(os.path.join(output_dir, "test.csv"), index = False)
+
+print("Datasets saved: train.csv, val.csv, test.csv")
 
 X_train = train[feature_cols]
 y_train = train["cases"]
 
+X_val = val[feature_cols]
+y_val = val["cases"]
+
 X_test = test[feature_cols]
 y_test = test["cases"]
 
-#HYPERPARAMETERS 
+
+# Model + hyperparameters
 param_grid = {
     "n_estimators": [100, 200],
     "max_depth": [5, 10, 15],
@@ -66,98 +95,183 @@ param_grid = {
     "max_features": ["sqrt", "log2"]
 }
 
-rf = RandomForestRegressor(random_state = 30, n_jobs = -1)
+rf = RandomForestRegressor(random_state=30, n_jobs=-1)
 
 grid_search = GridSearchCV(
-    estimator = rf,
-    param_grid = param_grid,
-    cv = 3,
-    scoring = "neg_mean_squared_error",
-    verbose = 1
+    estimator=rf,
+    param_grid=param_grid,
+    cv=3,
+    scoring="neg_mean_squared_error",
+    verbose=1
 )
 
+# Train
 grid_search.fit(X_train, y_train)
 
-# Best model
 best_rf = grid_search.best_estimator_
 
 print("\n--- Best Parameters ---")
 print(grid_search.best_params_)
 
-rf = best_rf
-rf.fit(X_train, y_train)
 
-y_pred = rf.predict(X_test)
+# Validation
+y_val_pred = best_rf.predict(X_val)
 
-rmse = np.sqrt(mean_squared_error(y_test, y_pred))
-mae = mean_absolute_error(y_test, y_pred)
-r2 = r2_score(y_test, y_pred)
+rmse_val = np.sqrt(mean_squared_error(y_val, y_val_pred))
+mae_val = mean_absolute_error(y_val, y_val_pred)
+r2_val = r2_score(y_val, y_val_pred)
 
-print("\n--- Random Forest ---")
+print("\n--- Validation (RF) ---")
+print(f"RMSE: {rmse_val:.2f}")
+print(f"MAE: {mae_val:.2f}")
+print(f"R2: {r2_val:.2f}")
+
+
+# Final model
+final_rf = best_rf
+final_rf.fit(X_train, y_train)
+
+
+# Test
+y_test_pred = final_rf.predict(X_test)
+
+rmse = np.sqrt(mean_squared_error(y_test, y_test_pred))
+mae = mean_absolute_error(y_test, y_test_pred)
+r2 = r2_score(y_test, y_test_pred)
+
+print("\n--- Test (RF) ---")
 print(f"RMSE: {rmse:.2f}")
 print(f"MAE: {mae:.2f}")
 print(f"R2: {r2:.2f}")
 
+
+# Feature importance
+importances = pd.DataFrame({
+    "feature": feature_cols,
+    "importance": final_rf.feature_importances_
+}).sort_values("importance", ascending=False)
+
+print("\n--- Feature Importances ---")
+print(importances)
+
+
 # BASELINE
-y_pred_baseline = X_test["lag1"]
+y_val_baseline = X_val["lag1"]
 
-rmse_base = np.sqrt(mean_squared_error(y_test, y_pred_baseline))
-mae_base = mean_absolute_error(y_test, y_pred_baseline)
-r2_base = r2_score(y_test, y_pred_baseline)
+rmse_val_base = np.sqrt(mean_squared_error(y_val, y_val_baseline))
+mae_val_base = mean_absolute_error(y_val, y_val_baseline)
+r2_val_base = r2_score(y_val, y_val_baseline)
 
-print("\n--- Baseline (lag1) ---")
-print(f"RMSE: {rmse_base:.2f}")
-print(f"MAE: {mae_base:.2f}")
-print(f"R2: {r2_base:.2f}")
+print("\n--- Baseline (Validation) ---")
+print(f"RMSE: {rmse_val_base:.2f}")
+print(f"MAE: {mae_val_base:.2f}")
+print(f"R2: {r2_val_base:.2f}")
 
-#PLOTS
-test_sorted = test.sort_values(["year", "week"]).reset_index(drop = True)
-X_test_sorted = test_sorted[feature_cols]
-y_pred_sorted = rf.predict(X_test_sorted)
+y_test_baseline = X_test["lag1"]
 
-test_sorted = test_sorted[(test_sorted["year"] >= 2022) & (test_sorted["year"] <= 2026)]
-X_test_sorted = test_sorted[feature_cols]
-y_pred_sorted = rf.predict(X_test_sorted)
+rmse_test_base = np.sqrt(mean_squared_error(y_test, y_test_baseline))
+mae_test_base = mean_absolute_error(y_test, y_test_baseline)
+r2_test_base = r2_score(y_test, y_test_baseline)
 
-years = sorted(test_sorted["year"].unique())
-palette = sns.color_palette("tab10", len(years))
+print("\n--- Baseline (Test) ---")
+print(f"RMSE: {rmse_test_base:.2f}")
+print(f"MAE: {mae_test_base:.2f}")
+print(f"R2: {r2_test_base:.2f}")
 
-# 2 subplots
-fig, axes = plt.subplots(1, 2, figsize=(16,6), sharey=True)
+# PLOTS
+# Real
+plt.figure(figsize=(14, 6))
 
-# PLOT 1: REAL
-for i, year in enumerate(years):
-    df_year = test_sorted[test_sorted["year"] == year]
-    axes[0].scatter(df_year["week"], df_year["cases"], color = palette[i], label = str(year), s = 25, alpha = 0.6)
+countries = data["country"].unique()
 
-axes[0].set_title("Real Cases (2022-2026)")
-axes[0].set_xlabel("Week")
-axes[0].set_ylabel("Cases")
-axes[0].set_xticks(range(1,53,2))
-axes[0].set_ylim(0, 400)
-axes[0].legend(title = "Year", bbox_to_anchor = (1.05,1), loc = 'upper left')
+for country in countries:
+    df_country = data[data["country"] == country].sort_values(["year", "week"])
+    
+    plt.plot(
+        df_country["year"] + df_country["week"]/52, 
+        df_country["cases"],
+        label = country,
+        alpha = 0.7
+    )
 
-# PLOT 2: PREDICTED
-for i, year in enumerate(years):
-    df_year = test_sorted[test_sorted["year"] == year]
-    y_pred_year = rf.predict(df_year[feature_cols])
-    axes[1].scatter(df_year["week"], y_pred_year, color = palette[i], label = str(year), s = 25, alpha = 0.6)
+plt.title("Influenza Cases Over Time by Country")
+plt.xlabel("Year")
+plt.ylabel("Cases")
+plt.legend(bbox_to_anchor = (1.05, 1), loc = "upper left")
+plt.tight_layout()
+plt.show()
 
-axes[1].set_title("Predicted Cases (Random Forest, 2022-2026)")
-axes[1].set_xlabel("Week")
-axes[1].set_xticks(range(1,53,2))
-axes[1].set_ylim(0, 400)
-axes[1].legend(title = "Year", bbox_to_anchor = (1.05,1), loc = 'upper left')
+# Predictions
+plt.figure(figsize = (14, 6))
+
+for country in data["country"].unique():
+    df_country = data[data["country"] == country].sort_values(["year", "week"])
+    
+    X_country = df_country[feature_cols]
+    y_pred = final_rf.predict(X_country)
+    time = df_country["year"] + df_country["week"]/52
+    
+    plt.plot(time, y_pred, alpha = 0.4, label = country)
+
+plt.title("Model Predictions Across Countries")
+plt.xlabel("Year")
+plt.ylabel("Predicted Cases")
+plt.legend(bbox_to_anchor = (1.05, 1), loc = "upper left")
+plt.tight_layout()
+plt.show()
+
+# Predicted vs real
+model = final_rf 
+
+y_pred = model.predict(X_test)
+
+plt.figure(figsize = (6, 6))
+
+plt.scatter(y_test, y_pred, alpha=0.4)
+
+min_val = min(y_test.min(), y_pred.min())
+max_val = max(y_test.max(), y_pred.max())
+
+plt.plot([min_val, max_val], [min_val, max_val], color = "red", linestyle = "--")
+
+plt.title("Parity Plot (Real vs Predicted)")
+plt.xlabel("Real Cases")
+plt.ylabel("Predicted Cases")
 
 plt.tight_layout()
 plt.show()
 
+# Spain
+country = "Spain"
 
-spain_data = data[data["country"] == "Spain"].sort_values(["year", "week"])
+df_country = data[data["country"] == country].sort_values(["year", "week"])
+
+X_country = df_country[feature_cols]
+y_real = df_country["cases"]
+y_pred = final_rf.predict(X_country)
+
+time = df_country["year"] + df_country["week"]/52
+
+plt.figure(figsize = (14, 5))
+
+plt.plot(time, y_real, label = "Real cases", alpha = 0.7)
+plt.plot(time, y_pred, label = "Predicted cases", alpha = 0.7)
+
+plt.title(f"Real vs Predicted Influenza Cases - {country}")
+plt.xlabel("Year")
+plt.ylabel("Cases")
+plt.legend()
+plt.tight_layout()
+plt.show()
+
+
+
+""" spain_data = data[data["country"] == "Spain"].sort_values(["year", "week"])
 last_rows = spain_data.iloc[-5:]
 
 new_data = pd.DataFrame({
-    "country_code": [spain_data["country_code"].iloc[0]],
+    "lat": [spain_data["lat"].iloc[0]],
+    "lon": [spain_data["lon"].iloc[0]],
     "year": [2024],
     "week_sin": [np.sin(2 * np.pi * 1 / 52)],
     "week_cos": [np.cos(2 * np.pi * 1 / 52)],
@@ -172,8 +286,7 @@ new_data = pd.DataFrame({
 predicted_cases = rf.predict(new_data)
 
 print(f"\nPredicted cases for Spain 2024-W01: {predicted_cases[0]:.0f}")
-
-
+ """
 
 """ 
 #TODO: LINEAL
