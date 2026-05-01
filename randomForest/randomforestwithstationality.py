@@ -31,12 +31,11 @@ data["week_cos"] = np.cos(2 * np.pi * data["week"] / 52)
 # Eliminar NaNs
 data = data.dropna()
 
-# Country encoding
-data = data.dropna(subset=["lat", "lon"])
+countries_series = data["country"].copy()
+
+data = pd.get_dummies(data, columns=["country"], drop_first=True)
 
 feature_cols = [
-    "lat",
-    "lon",
     "year",
     "week_sin",
     "week_cos",
@@ -46,16 +45,17 @@ feature_cols = [
     "lag4",
     "rolling_mean_3",
     "rolling_mean_5"
-]
+] + [col for col in data.columns if col.startswith("country_")]
 
 X = data[feature_cols]
 y = data["cases"]
 
+
 train_list = []
 val_list = []
 test_list = []
-for country in data["country"].unique():
-    df_country = data[data["country"] == country].sort_values(["year", "week"])
+for country in countries_series.unique():
+    df_country = data[countries_series == country].sort_values(["year", "week"])
     
     n = len(df_country)
     train_end = int(n * 0.7)
@@ -95,14 +95,14 @@ param_grid = {
     "max_features": ["sqrt", "log2"]
 }
 
-rf = RandomForestRegressor(random_state=30, n_jobs=-1)
+rf = RandomForestRegressor(random_state = 30, n_jobs = -1)
 
 grid_search = GridSearchCV(
-    estimator=rf,
-    param_grid=param_grid,
-    cv=3,
-    scoring="neg_mean_squared_error",
-    verbose=1
+    estimator = rf,
+    param_grid = param_grid,
+    cv = 3,
+    scoring = "neg_mean_squared_error",
+    verbose = 1
 )
 
 # Train
@@ -178,92 +178,90 @@ print(f"RMSE: {rmse_test_base:.2f}")
 print(f"MAE: {mae_test_base:.2f}")
 print(f"R2: {r2_test_base:.2f}")
 
-# PLOTS
-# Real
+#PLOTS
+# Obtener columnas de países dummy
+country_cols = [c for c in data.columns if c.startswith("country_")]
+
+# REAL
 plt.figure(figsize=(14, 6))
 
-countries = data["country"].unique()
+for col in country_cols:
+    country_name = col.replace("country_", "")
 
-for country in countries:
-    df_country = data[data["country"] == country].sort_values(["year", "week"])
-    
-    plt.plot(
-        df_country["year"] + df_country["week"]/52, 
-        df_country["cases"],
-        label = country,
-        alpha = 0.7
-    )
+    df_country = data[data[col] == 1].sort_values(["year", "week"])
 
-plt.title("Influenza Cases Over Time by Country")
+    time = df_country["year"] + df_country["week"] / 52
+
+    plt.plot(time, df_country["cases"], label=country_name, alpha=0.7)
+
+plt.title("Influenza cases over time by country")
 plt.xlabel("Year")
 plt.ylabel("Cases")
-plt.legend(bbox_to_anchor = (1.05, 1), loc = "upper left")
+plt.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
 plt.tight_layout()
 plt.show()
 
-# Predictions
-plt.figure(figsize = (14, 6))
+# PREDICTIONS
+plt.figure(figsize=(14, 6))
 
-for country in data["country"].unique():
-    df_country = data[data["country"] == country].sort_values(["year", "week"])
-    
+for col in country_cols:
+    country_name = col.replace("country_", "")
+
+    df_country = data[data[col] == 1].sort_values(["year", "week"])
+
     X_country = df_country[feature_cols]
     y_pred = final_rf.predict(X_country)
-    time = df_country["year"] + df_country["week"]/52
-    
-    plt.plot(time, y_pred, alpha = 0.4, label = country)
 
-plt.title("Model Predictions Across Countries")
+    time = df_country["year"] + df_country["week"] / 52
+
+    plt.plot(time, y_pred, label=country_name, alpha=0.4)
+
+plt.title("Model predictions across countries")
 plt.xlabel("Year")
-plt.ylabel("Predicted Cases")
-plt.legend(bbox_to_anchor = (1.05, 1), loc = "upper left")
+plt.ylabel("Predicted cases")
+plt.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
 plt.tight_layout()
 plt.show()
 
-# Predicted vs real
-model = final_rf 
+# PARITY PLOT
+y_pred = final_rf.predict(X_test)
 
-y_pred = model.predict(X_test)
-
-plt.figure(figsize = (6, 6))
-
+plt.figure(figsize=(6, 6))
 plt.scatter(y_test, y_pred, alpha=0.4)
 
 min_val = min(y_test.min(), y_pred.min())
 max_val = max(y_test.max(), y_pred.max())
 
-plt.plot([min_val, max_val], [min_val, max_val], color = "red", linestyle = "--")
+plt.plot([min_val, max_val], [min_val, max_val], linestyle="--")
 
-plt.title("Parity Plot (Real vs Predicted)")
-plt.xlabel("Real Cases")
-plt.ylabel("Predicted Cases")
+plt.title("Parity plot (Real vs predicted)")
+plt.xlabel("Real cases")
+plt.ylabel("Predicted cases")
 
 plt.tight_layout()
 plt.show()
 
-# Spain
-country = "Spain"
+# SPAIN 
+country_col = "country_Spain"
 
-df_country = data[data["country"] == country].sort_values(["year", "week"])
+df_country = data[data[country_col] == 1].sort_values(["year", "week"])
 
 X_country = df_country[feature_cols]
 y_real = df_country["cases"]
 y_pred = final_rf.predict(X_country)
 
-time = df_country["year"] + df_country["week"]/52
+time = df_country["year"] + df_country["week"] / 52
 
-plt.figure(figsize = (14, 5))
+plt.figure(figsize=(14, 5))
+plt.plot(time, y_real, label="Real cases", alpha=0.7)
+plt.plot(time, y_pred, label="Predicted cases", alpha=0.7)
 
-plt.plot(time, y_real, label = "Real cases", alpha = 0.7)
-plt.plot(time, y_pred, label = "Predicted cases", alpha = 0.7)
-
-plt.title(f"Real vs Predicted Influenza Cases - {country}")
+plt.title("Real vs predicted influenza cases - Spain")
 plt.xlabel("Year")
 plt.ylabel("Cases")
 plt.legend()
 plt.tight_layout()
 plt.show()
-
 
 
 """ spain_data = data[data["country"] == "Spain"].sort_values(["year", "week"])

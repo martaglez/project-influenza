@@ -18,8 +18,7 @@ test$country  <- as.factor(test$country)
 gam_model <- gam(
   cases ~ 
     s(year, k = 3) +
-    s(week, bs = "cc", k = 3) +
-    lat + lon,
+    s(week, bs = "cc", k = 3),
   data = train,
   method = "REML"
 )
@@ -120,3 +119,4 @@ ggplot(df_country, aes(x = time)) +
 library(patchwork)
 geom_line(real)
 geom_line(pred)
+
